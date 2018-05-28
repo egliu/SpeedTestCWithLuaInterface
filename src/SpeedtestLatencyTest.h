@@ -3,6 +3,6 @@
 
 #include "Speedtest.h"
 
-void testLatency(const char *url, SPEEDTESTRS_T *rst);
+int testLatency(const char *url);
 
 #endif

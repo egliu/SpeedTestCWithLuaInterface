@@ -9,10 +9,11 @@ typedef struct speedtestServer
 	char *name;
 	char *country;
 	char *sponsor;
-	long distance;
+	float distance;
 	long id;
 } SPEEDTESTSERVER_T;
-SPEEDTESTSERVER_T **getServers(int *serverCount, const char *infraUrl);
-char *getServerDownloadUrl(char *serverUrl);
+SPEEDTESTSERVER_T **getServers(int *serverCount, char *ignoreServers, float lat, float lon);
+char *getServerDownloadUrl(char *serverUrl, int size);
 char *getLatencyUrl(char *serverUrl);
+#define SERVER_SIZE 5000
 #endif

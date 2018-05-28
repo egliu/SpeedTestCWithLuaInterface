@@ -49,23 +49,37 @@ float getElapsedTime(struct timeval tval_start) {
 
 void freeMem()
 {
-    free(latencyUrl);
-    free(downloadUrl);
-    free(uploadUrl);
-    free(serverList);
-    free(speedTestConfig);
+    if (uploadUrl) {
+        free(uploadUrl);
+        uploadUrl = NULL;
+    }
+    if (serverList) {
+        free(serverList);
+        serverList = NULL;
+    }
+    if (speedTestConfig) {
+        if (speedTestConfig->downloadThreadConfig.sizes) {
+            free(speedTestConfig->downloadThreadConfig.sizes);
+            speedTestConfig->downloadThreadConfig.sizes = NULL;
+        }
+        if (speedTestConfig->uploadThreadConfig.sizes) {
+            free(speedTestConfig->uploadThreadConfig.sizes);
+            speedTestConfig->downloadThreadConfig.sizes = NULL;
+        }
+        free(speedTestConfig);
+        speedTestConfig = NULL;
+    }
 }
 
 int InitSpeedTest(lua_State* L)
 {
     freeMem();
     // parameters from lua is not supported yet
-    totalTransfered = 1024 * 1024;
-    totalToBeTransfered = 1024 * 1024;
+    totalToBeTransfered = 0;
     totalDownloadTestCount = 1;
     randomizeBestServers = 0;
     speedTestConfig = NULL;
-    downloadUrl = NULL;
+    uploadUrl = NULL;
     return 1;
 }
 
@@ -121,6 +135,12 @@ int GetConfig(lua_State* L)
         lua_pushstring(L, "threadsCount");
         lua_pushnumber(L, speedTestConfig->uploadThreadConfig.threadsCount);
         lua_settable(L, -3);
+        lua_pushstring(L, "sizeLength");
+        lua_pushnumber(L, speedTestConfig->uploadThreadConfig.sizeLength);
+        lua_settable(L, -3);
+        lua_pushstring(L, "count");
+        lua_pushnumber(L, speedTestConfig->uploadThreadConfig.count);
+        lua_settable(L, -3);
         lua_pushstring(L, "length");
         lua_pushnumber(L, speedTestConfig->uploadThreadConfig.length);
         lua_settable(L, -3);
@@ -130,6 +150,12 @@ int GetConfig(lua_State* L)
         lua_newtable(L);
         lua_pushstring(L, "threadsCount");
         lua_pushnumber(L, speedTestConfig->downloadThreadConfig.threadsCount);
+        lua_settable(L, -3);
+        lua_pushstring(L, "sizeLength");
+        lua_pushnumber(L, speedTestConfig->downloadThreadConfig.sizeLength);
+        lua_settable(L, -3);
+        lua_pushstring(L, "count");
+        lua_pushnumber(L, speedTestConfig->downloadThreadConfig.count);
         lua_settable(L, -3);
         lua_pushstring(L, "length");
         lua_pushnumber(L, speedTestConfig->downloadThreadConfig.length);
@@ -142,6 +168,7 @@ int GetConfig(lua_State* L)
 int GetBestServer(lua_State* L)
 {
     size_t selectedServer = 0;
+    float selectedLatency = 0.0;
     lua_newtable(L);
     if (speedTestConfig == NULL)
     {
@@ -156,12 +183,8 @@ int GetBestServer(lua_State* L)
         lua_settable(L, -3);
     } else 
     {
-        serverList = getServers(&serverCount, "http://www.speedtest.net/speedtest-servers-static.php");
-        if (serverCount == 0)
-        {
-            // Primary server is not responding. Let's give a try with secondary one.
-            serverList = getServers(&serverCount, "http://c.speedtest.net/speedtest-servers-static.php");
-        }
+        serverList = getServers(&serverCount, speedTestConfig->ignoreServers,
+            speedTestConfig->lat, speedTestConfig->lon);
         if ((serverCount == 0) || (NULL == serverList))
         {
             freeMem();
@@ -174,20 +197,32 @@ int GetBestServer(lua_State* L)
             lua_settable(L, -3);
         } else
         {
-            for(i=0; i<serverCount; i++)
-                serverList[i]->distance = haversineDistance(speedTestConfig->lat,
-                    speedTestConfig->lon,
-                    serverList[i]->lat,
-                    serverList[i]->lon);
-
             qsort(serverList, serverCount, sizeof(SPEEDTESTSERVER_T *),
                         (int (*)(const void *,const void *)) sortServers);
 
             if (randomizeBestServers != 0) {
                 srand(time(NULL));
                 selectedServer = rand() % randomizeBestServers;
+            } else {
+                /* Choose the best server based ping latency in the 5 closest servers */
+                int latency[5] = {0};
+                for(int count=0; count<5; count++) {
+                    char *url = getLatencyUrl(serverList[count]->url);
+                    if (NULL != url) {
+                        /* test latency 3 times*/
+                        for(int tCount=0; tCount<3; tCount++) {
+                            latency[count] += testLatency(url);
+                        }
+                        if (count > 0) {
+                            if(latency[count] < latency[selectedServer]) {
+                                selectedServer = count;
+                            }
+                        }
+                        free(url);
+                    }
+                }
+                selectedLatency = latency[selectedServer] / 3;
             }
-            downloadUrl = getServerDownloadUrl(serverList[selectedServer]->url);
             uploadUrl = malloc(sizeof(char) * strlen(serverList[selectedServer]->url) + 1);
             strcpy(uploadUrl, serverList[selectedServer]->url);
 
@@ -231,11 +266,16 @@ int GetBestServer(lua_State* L)
             lua_pushnumber(L, serverList[selectedServer]->id);
             lua_settable(L, -3);
 
+            lua_pushstring(L, "latency");
+            lua_pushnumber(L, selectedLatency);
+            lua_settable(L, -3);
+
             for(i=0; i<serverCount; i++){
                 free(serverList[i]->url);
                 free(serverList[i]->name);
                 free(serverList[i]->sponsor);
                 free(serverList[i]->country);
+                free(serverList[i]->id);
                 free(serverList[i]);
             }
         }
@@ -246,67 +286,30 @@ int GetBestServer(lua_State* L)
 
 int TestSpeed(lua_State* L)
 {
+    float downloadSpeed = 0;
+    float uploadSpeed = 0;
     lua_newtable(L);
-    latencyUrl = getLatencyUrl(uploadUrl);
-    if ((NULL == uploadUrl) || (NULL == downloadUrl) || (NULL == latencyUrl))
+    if (NULL == uploadUrl)
     {
         lua_pushstring(L, "errorCode");
         lua_pushnumber(L, 1);
         lua_settable(L, -3);
 
         lua_pushstring(L, "errorInfo");
-        lua_pushstring(L, "uploadUrl or downloadUrl or latencyUrl is NULL.");
+        lua_pushstring(L, "uploadUrl is NULL.");
         lua_settable(L, -3);
     } else 
     {
-        SPEEDTESTRS_T* result = malloc(sizeof(SPEEDTESTRS_T));
-        if (NULL == result) 
-        {
-            lua_pushstring(L, "errorCode");
-            lua_pushnumber(L, 1);
-            lua_settable(L, -3);
-
-            lua_pushstring(L, "errorInfo");
-            lua_pushstring(L, "Fail to get memory for SPEEDTESTRS_T.");
-            lua_settable(L, -3);
-        } else 
-        {
-            memset(result, 0, sizeof(SPEEDTESTRS_T));
-            // first step: test Latency
-            testLatency(latencyUrl, result);
-            if (result->errorCode != 0)
-            {
-                lua_pushstring(L, "errorCode");
-                lua_pushnumber(L, result->errorCode);
-                lua_settable(L, -3);
-
-                lua_pushstring(L, "errorInfo");
-                lua_pushstring(L, result->errorInfo);
-                lua_settable(L, -3);
-            } else
-            {
-                lua_pushstring(L, "errorCode");
-                lua_pushnumber(L, result->errorCode);
-                lua_settable(L, -3);
-
-                lua_pushstring(L, "latency");
-                lua_pushnumber(L, result->speed);
-                lua_settable(L, -3);
-                // second step: test download
-                memset(result, 0, sizeof(SPEEDTESTRS_T));
-                testDownload(downloadUrl, result);
-                lua_pushstring(L, "download");
-                lua_pushnumber(L, result->speed);
-                lua_settable(L, -3);
-                // third step: test upload
-                memset(result, 0, sizeof(SPEEDTESTRS_T));
-                testUpload(uploadUrl, result);
-                lua_pushstring(L, "upload");
-                lua_pushnumber(L, result->speed);
-                lua_settable(L, -3);
-            }
-        }
-        free(result);
+        // test download
+        downloadSpeed = testDownload(uploadUrl);
+        lua_pushstring(L, "download");
+        lua_pushnumber(L, downloadSpeed);
+        lua_settable(L, -3);
+        // test upload
+        uploadSpeed = testUpload(uploadUrl);
+        lua_pushstring(L, "upload");
+        lua_pushnumber(L, uploadSpeed);
+        lua_settable(L, -3);
     }
 
     freeMem();

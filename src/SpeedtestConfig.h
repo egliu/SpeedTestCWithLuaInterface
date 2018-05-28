@@ -12,6 +12,9 @@
 #endif /* ARRAY_SIZE */
 
 typedef struct ThreadConfig {
+	int *sizes;
+	int sizeLength;
+	int count;
 	int threadsCount; /* number of threads */
 	int length; /* testlength? */
 } THREADCONFIG_T;
@@ -24,8 +27,10 @@ typedef struct speedtestConfig
 	char isp[255];
 	THREADCONFIG_T uploadThreadConfig;
 	THREADCONFIG_T downloadThreadConfig;
+	char ignoreServers[65535];
+	int upload_max;
 } SPEEDTESTCONFIG_T;
 
 SPEEDTESTCONFIG_T *getConfig();
-long haversineDistance(float lat1, float lon1, float lat2, float lon2);
+float haversineDistance(float lat1, float lon1, float lat2, float lon2);
 #endif

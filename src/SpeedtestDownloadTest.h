@@ -3,6 +3,6 @@
 
 #include "Speedtest.h"
 
-void testDownload(const char *url, SPEEDTESTRS_T *rst);
+float testDownload(const char *url);
 
 #endif

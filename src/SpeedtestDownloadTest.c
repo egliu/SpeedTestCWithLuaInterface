@@ -11,55 +11,49 @@
 static void *__downloadThread(void *arg)
 {
   THREADARGS_T *threadConfig = (THREADARGS_T*)arg;
-	int testNum;
 	char buffer[BUFFER_SIZE] = {0};
-	struct timeval tval_start;
+	int size = 1;
+	int sockId = httpGetRequestSocket(threadConfig->url);
 
-	gettimeofday(&tval_start, NULL);
-	for (testNum = 0; testNum < threadConfig->testCount; testNum++)
-  {
-		int size = -1;
-		int sockId = httpGetRequestSocket(threadConfig->url);
-
-		if(sockId == 0)
-		{
-		  fprintf(stderr, "Unable to open socket for Download!");
-			pthread_exit(NULL);
-		}
-
-		while(size != 0)
-		{
-		  size = httpRecv(sockId, buffer, BUFFER_SIZE);
-			if (size != -1)
-      {
-        threadConfig->transferedBytes += size;
-      }
-		}
-		httpClose(sockId);
+	if(sockId == 0)
+	{
+		fprintf(stderr, "Unable to open socket for Download!");
+		pthread_exit(NULL);
 	}
-	threadConfig->elapsedSecs = getElapsedTime(tval_start);
+
+	while((size != 0) && (getElapsedTime(tval_start) < threadConfig->timeout))
+	{
+		size = httpRecv(sockId, buffer, BUFFER_SIZE);
+    threadConfig->transferedBytes += size;
+	}
+	httpClose(sockId);
 
 	return NULL;
 }
 
-void testDownload(const char *url, SPEEDTESTRS_T *rst)
+float testDownload(const char *url)
 {
-  size_t numOfThreads = speedTestConfig->downloadThreadConfig.threadsCount;
+  size_t numOfThreads = speedTestConfig->downloadThreadConfig.count *
+    speedTestConfig->downloadThreadConfig.sizeLength;
   THREADARGS_T *param = (THREADARGS_T *)calloc(numOfThreads, sizeof(THREADARGS_T));
   int i;
   float speed = 0;
+  unsigned long totalTransfered = 0;
 
   /* Initialize and start threads */
-  for (i = 0; i < numOfThreads; i++) {
-    param[i].testCount = totalDownloadTestCount / numOfThreads;
-    if (param[i].testCount == 0) {
-      /* At least one test should be run */
-      param[i].testCount = 1;
+  gettimeofday(&tval_start, NULL);
+  for (int sizeCount=0; sizeCount<speedTestConfig->downloadThreadConfig.sizeLength; sizeCount++) {
+    char *downloadUrl = getServerDownloadUrl(url, speedTestConfig->downloadThreadConfig.sizes[sizeCount]);
+    for (int threadCount=0; threadCount<speedTestConfig->downloadThreadConfig.count; threadCount++) {
+      param[sizeCount*speedTestConfig->downloadThreadConfig.count + threadCount].url = strdup(downloadUrl);
+      param[sizeCount*speedTestConfig->downloadThreadConfig.count + threadCount].timeout = 
+        speedTestConfig->downloadThreadConfig.length;
+      if (param[sizeCount*speedTestConfig->downloadThreadConfig.count + threadCount].url) {
+        pthread_create(&param[sizeCount*speedTestConfig->downloadThreadConfig.count + threadCount].tid,
+          NULL, &__downloadThread, &param[sizeCount*speedTestConfig->downloadThreadConfig.count + threadCount]);
+      }
     }
-    param[i].url = strdup(url);
-    if (param[i].url) {
-      pthread_create(&param[i].tid, NULL, &__downloadThread, &param[i]);
-    }
+    free(downloadUrl);
   }
   /* Wait for all threads */
   for (i = 0; i < numOfThreads; i++) {
@@ -67,15 +61,11 @@ void testDownload(const char *url, SPEEDTESTRS_T *rst)
     if (param[i].transferedBytes) {
       /* There's no reason that we transfered nothing except error occured */
       totalTransfered += param[i].transferedBytes;
-      speed += (param[i].transferedBytes / param[i].elapsedSecs) / 1024;
     }
     /* Cleanup */
     free(param[i].url);
   }
   free(param);
-
-  /* Report */
-  // printf("Bytes %lu downloaded with a speed %.2f kB/s (%.2f Mbit/s)\n",
-  //    totalTransfered, speed, speed * 8 / 1024);
-  rst->speed = speed * 8 / 1024;
+  speed = totalTransfered / getElapsedTime(tval_start) / 1024 / 1024 * 8;
+  return speed;
 }
