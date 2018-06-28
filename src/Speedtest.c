@@ -80,6 +80,7 @@ int InitSpeedTest(lua_State* L)
     randomizeBestServers = 0;
     speedTestConfig = NULL;
     uploadUrl = NULL;
+    serverCount=0;
     return 1;
 }
 
